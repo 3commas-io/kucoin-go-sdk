@@ -4,16 +4,18 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"github.com/dgrr/fastws"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
+
+const ReadeBufferSize = 2048000
 
 // A WebSocketTokenModel contains a token and some servers for WebSocket feed.
 type WebSocketTokenModel struct {
@@ -148,7 +150,7 @@ type WebSocketClient struct {
 	errors chan error
 	// Downstream message channel
 	messages        chan *WebSocketDownstreamMessage
-	conn            *websocket.Conn
+	conn            *fastws.Conn
 	token           *WebSocketTokenModel
 	server          *WebSocketServerModel
 	enableHeartbeat bool
@@ -209,20 +211,21 @@ func (wc *WebSocketClient) Connect() (<-chan *WebSocketDownstreamMessage, <-chan
 	}
 	u := fmt.Sprintf("%s?%s", s.Endpoint, q.Encode())
 
-	// Ignore verify tls
-	websocket.DefaultDialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: wc.skipVerifyTls}
-
 	// Connect ws server
-	websocket.DefaultDialer.ReadBufferSize = 2048000 //2000 kb
-	wc.conn, _, err = websocket.DefaultDialer.Dial(u, nil)
+	wc.conn, err = fastws.DialTLS(u, &tls.Config{InsecureSkipVerify: wc.skipVerifyTls})
 	if err != nil {
 		return wc.messages, wc.errors, err
 	}
 
 	// Must read the first welcome message
 	for {
+		buf := make([]byte, ReadeBufferSize)
 		m := &WebSocketDownstreamMessage{}
-		if err := wc.conn.ReadJSON(m); err != nil {
+		_, _, err := wc.conn.ReadMessage(buf)
+		if err != nil {
+			return wc.messages, wc.errors, err
+		}
+		if err := json.Unmarshal(buf, m); err != nil {
 			return wc.messages, wc.errors, err
 		}
 		if DebugMode {
@@ -255,10 +258,14 @@ func (wc *WebSocketClient) read() {
 		case <-wc.done:
 			return
 		default:
+			buf := make([]byte, ReadeBufferSize)
 			m := &WebSocketDownstreamMessage{}
-			if err := wc.conn.ReadJSON(m); err != nil {
+			_, _, err := wc.conn.ReadMessage(buf)
+			if err != nil {
 				wc.errors <- err
-				return
+			}
+			if err := json.Unmarshal(buf, m); err != nil {
+				wc.errors <- err
 			}
 			if DebugMode {
 				logrus.Debugf("Received a WebSocket message: %s", ToJsonString(m))
@@ -302,7 +309,8 @@ func (wc *WebSocketClient) keepHeartbeat() {
 			if DebugMode {
 				logrus.Debugf("Sent a WebSocket message: %s", m)
 			}
-			if err := wc.conn.WriteMessage(websocket.TextMessage, []byte(m)); err != nil {
+			_, err := wc.conn.WriteMessage(fastws.ModeText, []byte(m))
+			if err != nil {
 				wc.errors <- err
 				return
 			}
@@ -331,7 +339,8 @@ func (wc *WebSocketClient) Subscribe(channels ...*WebSocketSubscribeMessage) err
 		if DebugMode {
 			logrus.Debugf("Sent a WebSocket message: %s", m)
 		}
-		if err := wc.conn.WriteMessage(websocket.TextMessage, []byte(m)); err != nil {
+		_, err := wc.conn.WriteMessage(fastws.ModeText, []byte(m))
+		if err != nil {
 			return err
 		}
 		//log.Printf("Subscribing: %s, %s", c.Id, c.Topic)
@@ -357,7 +366,8 @@ func (wc *WebSocketClient) Unsubscribe(channels ...*WebSocketUnsubscribeMessage)
 		if DebugMode {
 			logrus.Debugf("Sent a WebSocket message: %s", m)
 		}
-		if err := wc.conn.WriteMessage(websocket.TextMessage, []byte(m)); err != nil {
+		_, err := wc.conn.WriteMessage(fastws.ModeText, []byte(m))
+		if err != nil {
 			return err
 		}
 		//log.Printf("Unsubscribing: %s, %s", c.Id, c.Topic)
