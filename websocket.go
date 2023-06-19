@@ -262,9 +262,11 @@ func (wc *WebSocketClient) read() {
 			_, buf, err = wc.conn.ReadMessage(buf[:0])
 			if err != nil {
 				wc.errors <- err
+				return
 			}
 			if err := json.Unmarshal(buf, m); err != nil {
 				wc.errors <- err
+				return
 			}
 			if DebugMode {
 				logrus.Debugf("Received a WebSocket message: %s", ToJsonString(m))
