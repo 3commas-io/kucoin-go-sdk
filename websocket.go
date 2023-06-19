@@ -270,6 +270,7 @@ func (wc *WebSocketClient) read() {
 		wc.wg.Done()
 	}()
 
+	var err error
 	for {
 		select {
 		case <-wc.done:
@@ -277,7 +278,7 @@ func (wc *WebSocketClient) read() {
 		default:
 			buf := make([]byte, ReadeBufferSize)
 			m := &WebSocketDownstreamMessage{}
-			_, _, err := wc.conn.ReadMessage(buf)
+			_, buf, err = wc.conn.ReadMessage(buf)
 			if err != nil {
 				wc.errors <- err
 			}
