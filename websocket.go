@@ -15,22 +15,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const ReadeBufferSize = 2048000
-
-func findFirstNonZeroFromEnd(buffer []byte) int {
-	index := -1
-	for i := len(buffer) - 1; i >= 0; i-- {
-		if buffer[i] == 0 {
-			if i != len(buffer)-1 {
-				index = i + 1
-			}
-			break
-		}
-	}
-
-	return index // Если все байты в срезе нулевые
-}
-
 // A WebSocketTokenModel contains a token and some servers for WebSocket feed.
 type WebSocketTokenModel struct {
 	Token             string                `json:"token"`
@@ -233,16 +217,13 @@ func (wc *WebSocketClient) Connect() (<-chan *WebSocketDownstreamMessage, <-chan
 
 	// Must read the first welcome message
 	for {
-		var err error
-		buf := make([]byte, ReadeBufferSize)
+		var buf []byte
 		m := &WebSocketDownstreamMessage{}
-		_, buf, err = wc.conn.ReadMessage(buf)
+		_, buf, err = wc.conn.ReadMessage(buf[:0])
 		if err != nil {
 			return wc.messages, wc.errors, err
 		}
-
-		index := findFirstNonZeroFromEnd(buf)
-		if err := json.Unmarshal(buf[index:], m); err != nil {
+		if err := json.Unmarshal(buf, m); err != nil {
 			return wc.messages, wc.errors, err
 		}
 		if DebugMode {
@@ -276,14 +257,13 @@ func (wc *WebSocketClient) read() {
 		case <-wc.done:
 			return
 		default:
-			buf := make([]byte, ReadeBufferSize)
+			var buf []byte
 			m := &WebSocketDownstreamMessage{}
-			_, buf, err = wc.conn.ReadMessage(buf)
+			_, buf, err = wc.conn.ReadMessage(buf[:0])
 			if err != nil {
 				wc.errors <- err
 			}
-			index := findFirstNonZeroFromEnd(buf)
-			if err := json.Unmarshal(buf[index:], m); err != nil {
+			if err := json.Unmarshal(buf, m); err != nil {
 				wc.errors <- err
 			}
 			if DebugMode {
