@@ -215,6 +215,9 @@ func (wc *WebSocketClient) Connect() (<-chan *WebSocketDownstreamMessage, <-chan
 		return wc.messages, wc.errors, err
 	}
 
+	wc.conn.WriteTimeout = time.Second * 45
+	wc.conn.ReadTimeout = wc.conn.WriteTimeout
+
 	// Must read the first welcome message
 	for {
 		var buf []byte
