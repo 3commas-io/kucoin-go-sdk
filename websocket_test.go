@@ -1,6 +1,8 @@
 package kucoin
 
 import (
+	"context"
+	"net/http"
 	"testing"
 )
 
@@ -75,7 +77,7 @@ func TestWebSocketClient_Connect(t *testing.T) {
 
 	c := s.NewWebSocketClient(tk)
 
-	_, _, err = c.Connect()
+	_, _, err = c.Connect(context.Background(), http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +99,7 @@ func TestWebSocketClient_Subscribe(t *testing.T) {
 
 	c := s.NewWebSocketClient(tk)
 
-	mc, ec, err := c.Connect()
+	mc, ec, err := c.Connect(context.Background(), http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
 	}

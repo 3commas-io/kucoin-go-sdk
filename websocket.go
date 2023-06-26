@@ -1,13 +1,14 @@
 package kucoin
 
 import (
-	"crypto/tls"
+	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/dgrr/fastws"
 	"math/rand"
 	"net/http"
 	"net/url"
+	"nhooyr.io/websocket"
+	"nhooyr.io/websocket/wsjson"
 	"sync"
 	"time"
 
@@ -148,7 +149,7 @@ type WebSocketClient struct {
 	errors chan error
 	// Downstream message channel
 	messages        chan *WebSocketDownstreamMessage
-	conn            *fastws.Conn
+	conn            *websocket.Conn
 	token           *WebSocketTokenModel
 	server          *WebSocketServerModel
 	enableHeartbeat bool
@@ -192,7 +193,7 @@ func (as *ApiService) NewWebSocketClientOpts(opts WebSocketClientOpts) *WebSocke
 }
 
 // Connect connects the WebSocket server.
-func (wc *WebSocketClient) Connect() (<-chan *WebSocketDownstreamMessage, <-chan error, error) {
+func (wc *WebSocketClient) Connect(ctx context.Context, client *http.Client) (<-chan *WebSocketDownstreamMessage, <-chan error, error) {
 	// Find out a server
 	s, err := wc.token.Servers.RandomServer()
 	if err != nil {
@@ -209,24 +210,21 @@ func (wc *WebSocketClient) Connect() (<-chan *WebSocketDownstreamMessage, <-chan
 	}
 	u := fmt.Sprintf("%s?%s", s.Endpoint, q.Encode())
 
+	ctx, cancel := context.WithTimeout(ctx, time.Second*45)
+	defer cancel()
+
 	// Connect ws server
-	wc.conn, err = fastws.DialTLS(u, &tls.Config{InsecureSkipVerify: wc.skipVerifyTls})
+	wc.conn, _, err = websocket.Dial(ctx, u, &websocket.DialOptions{
+		HTTPClient: client,
+	})
 	if err != nil {
 		return wc.messages, wc.errors, err
 	}
 
-	wc.conn.WriteTimeout = time.Second * 45
-	wc.conn.ReadTimeout = wc.conn.WriteTimeout
-
 	// Must read the first welcome message
 	for {
-		var buf []byte
-		m := &WebSocketDownstreamMessage{}
-		_, buf, err = wc.conn.ReadMessage(buf[:0])
-		if err != nil {
-			return wc.messages, wc.errors, err
-		}
-		if err := json.Unmarshal(buf, m); err != nil {
+		m := WebSocketDownstreamMessage{}
+		if err := wsjson.Read(ctx, wc.conn, &m); err != nil {
 			return wc.messages, wc.errors, err
 		}
 		if DebugMode {
@@ -254,23 +252,24 @@ func (wc *WebSocketClient) read() {
 		wc.wg.Done()
 	}()
 
-	var err error
 	for {
 		select {
 		case <-wc.done:
 			return
 		default:
-			var buf []byte
-			m := &WebSocketDownstreamMessage{}
-			_, buf, err = wc.conn.ReadMessage(buf[:0])
-			if err != nil {
+			m := WebSocketDownstreamMessage{}
+			if err := func() error {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*45)
+				defer cancel()
+				if err := wsjson.Read(ctx, wc.conn, &m); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
 				wc.errors <- err
 				return
 			}
-			if err := json.Unmarshal(buf, m); err != nil {
-				wc.errors <- err
-				return
-			}
+
 			if DebugMode {
 				logrus.Debugf("Received a WebSocket message: %s", ToJsonString(m))
 			}
@@ -288,7 +287,7 @@ func (wc *WebSocketClient) read() {
 				wc.errors <- errors.Errorf("Error message: %s", ToJsonString(m))
 				return
 			case Message, Notice, Command:
-				wc.messages <- m
+				wc.messages <- &m
 			default:
 				wc.errors <- errors.Errorf("Unknown message type: %s", m.Type)
 			}
@@ -309,12 +308,18 @@ func (wc *WebSocketClient) keepHeartbeat() {
 			return
 		case <-pt.C:
 			p := NewPingMessage()
-			m := ToJsonString(p)
 			if DebugMode {
-				logrus.Debugf("Sent a WebSocket message: %s", m)
+				logrus.Debugf("Sent a WebSocket message: %s", ToJsonString(p))
 			}
-			_, err := wc.conn.WriteMessage(fastws.ModeText, []byte(m))
-			if err != nil {
+
+			if err := func() error {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*45)
+				defer cancel()
+				if err := wsjson.Write(ctx, wc.conn, p); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
 				wc.errors <- err
 				return
 			}
@@ -339,12 +344,17 @@ func (wc *WebSocketClient) keepHeartbeat() {
 // Subscribe subscribes the specified channel.
 func (wc *WebSocketClient) Subscribe(channels ...*WebSocketSubscribeMessage) error {
 	for _, c := range channels {
-		m := ToJsonString(c)
 		if DebugMode {
-			logrus.Debugf("Sent a WebSocket message: %s", m)
+			logrus.Debugf("Sent a WebSocket message: %s", ToJsonString(c))
 		}
-		_, err := wc.conn.WriteMessage(fastws.ModeText, []byte(m))
-		if err != nil {
+		if err := func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*45)
+			defer cancel()
+			if err := wsjson.Write(ctx, wc.conn, c); err != nil {
+				return err
+			}
+			return nil
+		}(); err != nil {
 			return err
 		}
 		//log.Printf("Subscribing: %s, %s", c.Id, c.Topic)
@@ -366,12 +376,17 @@ func (wc *WebSocketClient) Subscribe(channels ...*WebSocketSubscribeMessage) err
 // Unsubscribe unsubscribes the specified channel.
 func (wc *WebSocketClient) Unsubscribe(channels ...*WebSocketUnsubscribeMessage) error {
 	for _, c := range channels {
-		m := ToJsonString(c)
 		if DebugMode {
-			logrus.Debugf("Sent a WebSocket message: %s", m)
+			logrus.Debugf("Sent a WebSocket message: %s", ToJsonString(c))
 		}
-		_, err := wc.conn.WriteMessage(fastws.ModeText, []byte(m))
-		if err != nil {
+		if err := func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*45)
+			defer cancel()
+			if err := wsjson.Write(ctx, wc.conn, c); err != nil {
+				return err
+			}
+			return nil
+		}(); err != nil {
 			return err
 		}
 		//log.Printf("Unsubscribing: %s, %s", c.Id, c.Topic)
@@ -391,6 +406,6 @@ func (wc *WebSocketClient) Unsubscribe(channels ...*WebSocketUnsubscribeMessage)
 // Stop stops subscribing the specified channel, all goroutines quit.
 func (wc *WebSocketClient) Stop() {
 	close(wc.done)
-	_ = wc.conn.Close()
+	_ = wc.conn.Close(websocket.StatusNormalClosure, "close the connection")
 	wc.wg.Wait()
 }
