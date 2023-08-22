@@ -209,10 +209,31 @@ func (wc *WebSocketClient) Connect() (<-chan *WebSocketDownstreamMessage, <-chan
 		q.Add("acceptUserMessage", "true")
 	}
 
-	netConn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", s.Endpoint,
-		&tls.Config{InsecureSkipVerify: wc.skipVerifyTls})
+	uri, err := url.Parse(s.Endpoint)
 	if err != nil {
 		return wc.messages, wc.errors, err
+	}
+
+	port := ":443"
+	scheme := "https"
+	if uri.Scheme == "ws" {
+		scheme, port = "http", ":80"
+	}
+
+	addr := uri.Host + port
+
+	var netConn net.Conn
+	if scheme == "http" {
+		netConn, err = net.Dial("tcp", addr)
+		if err != nil {
+			return wc.messages, wc.errors, err
+		}
+	} else {
+		netConn, err = tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr,
+			&tls.Config{InsecureSkipVerify: wc.skipVerifyTls})
+		if err != nil {
+			return wc.messages, wc.errors, err
+		}
 	}
 
 	u := fmt.Sprintf("%s?%s", s.Endpoint, q.Encode())
