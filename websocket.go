@@ -211,6 +211,9 @@ func (wc *WebSocketClient) Connect() (<-chan *WebSocketDownstreamMessage, <-chan
 
 	netConn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", s.Endpoint,
 		&tls.Config{InsecureSkipVerify: wc.skipVerifyTls})
+	if err != nil {
+		return wc.messages, wc.errors, err
+	}
 
 	u := fmt.Sprintf("%s?%s", s.Endpoint, q.Encode())
 
