@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/dgrr/fastws"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -207,10 +208,14 @@ func (wc *WebSocketClient) Connect() (<-chan *WebSocketDownstreamMessage, <-chan
 	if wc.token.AcceptUserMessage == true {
 		q.Add("acceptUserMessage", "true")
 	}
+
+	netConn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", s.Endpoint,
+		&tls.Config{InsecureSkipVerify: wc.skipVerifyTls})
+
 	u := fmt.Sprintf("%s?%s", s.Endpoint, q.Encode())
 
 	// Connect ws server
-	wc.conn, err = fastws.DialTLS(u, &tls.Config{InsecureSkipVerify: wc.skipVerifyTls})
+	wc.conn, err = fastws.Client(netConn, u)
 	if err != nil {
 		return wc.messages, wc.errors, err
 	}
