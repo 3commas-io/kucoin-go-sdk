@@ -435,3 +435,7 @@ func (wc *WebSocketClient) Stop() {
 	_ = wc.conn.Close()
 	wc.wg.Wait()
 }
+
+func (wc *WebSocketClient) Done() <-chan struct{} {
+	return wc.done
+}
